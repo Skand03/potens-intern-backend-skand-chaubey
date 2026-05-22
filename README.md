@@ -29,6 +29,49 @@ npx prisma generate
 npm run dev
 ```
 
+Note on testing without Postgres
+
+If you don't have Postgres locally or want to run tests quickly, the project
+supports an in-memory test database. This is enabled automatically when
+`NODE_ENV=test` (so `npm test` works out of the box) or explicitly by setting
+`USE_IN_MEMORY_DB=true` when running the app. Example:
+
+```powershell
+# start app with in-memory DB
+$env:USE_IN_MEMORY_DB='true'; npm run dev
+
+# seed the in-memory DB for manual testing
+npm run seed
+```
+
+When preparing your final submission / CI, prefer running migrations against a
+real Postgres instance to validate the schema and behavior. The in-memory mode
+is only intended for local development and quick tests.
+
+Local helper scripts
+
+To simplify booting Postgres, running migrations, and starting the app, the
+repository includes helper scripts in `scripts/` for both Bash and PowerShell.
+
+Bash (Linux/macOS, Git Bash on Windows):
+
+```bash
+bash ./scripts/dev-docker.sh
+```
+
+PowerShell (Windows):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ./scripts/dev-docker.ps1
+```
+
+You can also use the npm wrapper commands:
+
+```bash
+npm run dev:docker        # runs the Bash helper
+npm run dev:docker:ps1    # runs the PowerShell helper on Windows
+```
+
 ### Run tests
 
 ```bash
