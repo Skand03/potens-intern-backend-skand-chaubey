@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model LogEntry {
+  id           Int      @id @default(autoincrement())
+  actor        String
+  action       String
+  payload      Json
+  eventTime    String   @map("event_time")
+  previousHash String   @map("previous_hash")
+  currentHash  String   @unique @map("current_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([eventTime])
+  @@index([actor])
+  @@map("logs")
+}
