@@ -1,179 +1,345 @@
 # Tamper-Evident Append-Only Log Service
 
-A cryptographically chained event log. Every entry stores a SHA-256 hash
-that links to its predecessor. Any silent edit to a stored entry breaks the
-chain, and `GET /verify` detects it.
+This repository contains the backend submission for Potens Q1.
+It is a backend-only API that stores audit logs in PostgreSQL and protects them with a SHA-256 hash chain.
+If a stored row is edited later, verification fails.
 
-Built with Node.js, Express, Prisma, and PostgreSQL.
+## What the project does
 
-## How to Run
+The service stores append-only log entries with these fields:
 
-### Option 1: Docker (one command)
+- `actor`
+- `action`
+- `payload`
+- `eventTime`
+- `previousHash`
+- `currentHash`
 
-```bash
-cp .env.example .env
-docker compose up --build
+Each entry hashes the previous entry, so the chain becomes tamper-evident.
+If anyone changes a historical row directly in the database, the hash chain breaks and `/verify` detects it.
+
+This is a backend-only project. There is no UI requirement in the brief.
+
+## Tech Stack
+
+- Node.js
+- Express
+- TypeScript
+- Prisma ORM
+- PostgreSQL
+- Pino for logging
+- Jest and Supertest for testing
+- Docker Compose for optional local containerized Postgres
+
+## Core idea
+
+The chain is built from this input:
+
+`previousHash | actor | action | canonicalPayload | eventTime`
+
+The payload is canonicalized first so object key order does not change the hash.
+That makes the system consistent even if payload data is sent in different orders.
+
+## Endpoints
+
+### Public
+
+- `GET /health`
+  - simple liveness check
+
+### Protected with `x-api-key`
+
+- `POST /log`
+  - appends a new log entry
+  - fields required: `actor`, `action`, `payload`
+  - automatically creates `eventTime`, `previousHash`, and `currentHash`
+  - rate limited to prevent abuse
+
+- `GET /log/:id`
+  - returns one entry
+  - also returns whether the row’s own hash and chain link are valid
+
+- `GET /verify`
+  - walks the full chain from oldest to newest
+  - returns `pass` if everything matches
+  - returns `fail` with the first broken row if tampering is found
+
+- `GET /export`
+  - filtered JSON export
+  - supports `from`, `to`, and `actor`
+
+## File layout
+
+- `src/index.ts`
+  - Express app and route registration
+
+- `src/db/client.ts`
+  - Prisma client singleton
+
+- `src/lib/auth.ts`
+  - API key middleware
+
+- `src/lib/hasher.ts`
+  - canonical JSON hashing and SHA-256 logic
+
+- `src/lib/verifier.ts`
+  - chain verification and per-entry verification
+
+- `src/lib/logger.ts`
+  - Pino logger setup
+
+- `src/routes/log.ts`
+  - `POST /log` and `GET /log/:id`
+
+- `src/routes/verify.ts`
+  - `GET /verify`
+
+- `src/routes/export.ts`
+  - `GET /export`
+
+- `src/cli/verify.ts`
+  - standalone chain verification command
+
+- `src/tests/log.test.ts`
+  - automated tests covering hashing, auth, chaining, tamper detection, and export
+
+- `prisma/schema.prisma`
+  - database schema
+
+- `prisma/migrations/`
+  - checked-in migration history
+
+## Database model
+
+The `LogEntry` table stores:
+
+- `id`
+- `actor`
+- `action`
+- `payload`
+- `eventTime`
+- `previousHash`
+- `currentHash`
+- `createdAt`
+
+Important design choice:
+
+- `eventTime` is stored as a string so the exact value used in hashing round-trips without precision or timezone drift.
+
+## How hashing works
+
+When a new entry is created:
+
+1. The app reads the latest row in the table.
+2. It takes the latest row’s `currentHash` as the new entry’s `previousHash`.
+3. It computes the new `currentHash` using SHA-256.
+4. It inserts the new row into PostgreSQL.
+
+If a historical row is modified later, the recomputed hash no longer matches the stored hash.
+That is how tampering is detected.
+
+## How verification works
+
+`GET /verify` walks the chain in ID order.
+For each row it checks two things:
+
+1. Does `previousHash` match the previous row’s `currentHash`?
+2. Does the stored `currentHash` equal the recomputed hash from the row data?
+
+If either check fails, verification stops and returns the first broken row.
+
+## Requirements covered from the brief
+
+- append-only log entries
+- SHA-256 hash chain
+- `POST /log`
+- `GET /log/:id`
+- `GET /verify`
+- `GET /export`
+- API key auth
+- rate limiting on POST
+- structured logging
+- checked-in migrations
+- CLI verification command
+- Docker support in the repo
+- automated tests
+
+## Setup
+
+### 1. Configure environment
+
+Copy the example environment file:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-Visit `http://localhost:3000/health` to confirm it is running.
+Update `DATABASE_URL` in `.env` so it points to a real PostgreSQL instance.
 
-### Option 2: Local
+### 2. Install dependencies
 
-```bash
-cp .env.example .env
-# Edit .env with your Postgres credentials
-
+```powershell
 npm install
+```
+
+### 3. Run migrations
+
+```powershell
 npx prisma migrate dev --name init
 npx prisma generate
+```
+
+### 4. Start the server
+
+```powershell
 npm run dev
 ```
 
-Note on testing without Postgres
+### 5. Open the health check
 
-If you don't have Postgres locally or want to run tests quickly, the project
-supports an in-memory test database. This is enabled automatically when
-`NODE_ENV=test` (so `npm test` works out of the box) or explicitly by setting
-`USE_IN_MEMORY_DB=true` when running the app. Example:
+```text
+http://localhost:3000/health
+```
+
+## How to test it locally
+
+### Run the automated test suite
 
 ```powershell
-# start app with in-memory DB
-$env:USE_IN_MEMORY_DB='true'; npm run dev
-
-# seed the in-memory DB for manual testing
-npm run seed
-```
-
-When preparing your final submission / CI, prefer running migrations against a
-real Postgres instance to validate the schema and behavior. The in-memory mode
-is only intended for local development and quick tests.
-
-Local helper scripts
-
-To simplify booting Postgres, running migrations, and starting the app, the
-repository includes helper scripts in `scripts/` for both Bash and PowerShell.
-
-Bash (Linux/macOS, Git Bash on Windows):
-
-```bash
-bash ./scripts/dev-docker.sh
-```
-
-PowerShell (Windows):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ./scripts/dev-docker.ps1
-```
-
-You can also use the npm wrapper commands:
-
-```bash
-npm run dev:docker        # runs the Bash helper
-npm run dev:docker:ps1    # runs the PowerShell helper on Windows
-```
-
-### Run tests
-
-```bash
 npm test
 ```
 
-### CLI chain integrity check
+### Run chain verification from the CLI
 
-```bash
+```powershell
 npm run verify
 ```
 
-## API
+### Create a log entry
 
-| Method | Endpoint               | Auth      | Description                                   |
-|--------|------------------------|-----------|-----------------------------------------------|
-| GET    | /health                | none      | Liveness check                                |
-| POST   | /log                   | x-api-key | Append entry. Rate limited: 100/15 min        |
-| GET    | /log/:id               | x-api-key | Entry plus self/link verification status      |
-| GET    | /verify                | x-api-key | Full chain scan. Returns pass/fail + broken id|
-| GET    | /export?from=&to=&actor= | x-api-key | Filtered JSON export                          |
-
-## Example Requests
-
-```bash
-curl -X POST http://localhost:3000/log \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: potens-dev-key-change-in-production" \
-  -d '{"actor":"alice","action":"login","payload":{"ip":"1.2.3.4"}}'
+```powershell
+Invoke-WebRequest -Method Post -UseBasicParsing http://localhost:3000/log `
+  -Headers @{ "x-api-key" = "potens-dev-key-change-in-production"; "Content-Type" = "application/json" } `
+  -Body '{"actor":"alice","action":"login","payload":{"ip":"1.2.3.4"}}'
 ```
 
-```bash
-curl http://localhost:3000/verify \
-  -H "x-api-key: potens-dev-key-change-in-production"
+### Check verification
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:3000/verify `
+  -Headers @{ "x-api-key" = "potens-dev-key-change-in-production" }
 ```
 
-```bash
-curl "http://localhost:3000/export?actor=alice&from=2026-05-01T00:00:00Z" \
-  -H "x-api-key: potens-dev-key-change-in-production"
+## How to prove tamper detection
+
+Use a direct database edit, not the API.
+
+### Option 1: Prisma Studio
+
+```powershell
+npx prisma studio
 ```
 
-## Design Decisions
+Then:
 
-**Canonical JSON hashing** — `computeHash` recursively sorts object keys before
-hashing, so `{"b":1,"a":2}` and `{"a":2,"b":1}` produce identical hashes.
-Without this, the same logical payload stored via different serializers would
-produce different hashes and break chain verification.
+1. Open the `logs` table.
+2. Edit one existing row.
+3. Change `action`, `actor`, or `payload`.
+4. Save.
+5. Run `GET /verify` again.
 
-**eventTime stored as TEXT** — Postgres TIMESTAMP can drift precision or
-timezone when read back through Prisma. Storing as an ISO string means the
-value round-trips bit-for-bit, which is critical because verification
-recomputes hashes from stored values.
+Expected result:
 
-**previousHash stored explicitly** — auto-increment order alone is not
-trustworthy as an audit boundary. The hash link is what makes the chain
-tamper-evident.
+- `status` becomes `fail`
+- `broken_id` points to the edited row
+- `reason` is usually `hash_mismatch`
 
-**Prisma $transaction on POST** — `findFirst` and `create` are wrapped in a
-transaction so two concurrent POSTs cannot both read the same `lastEntry` and
-produce duplicate `previousHash` values.
+### Option 2: SQL
 
-**Rate limiting on POST only** — `/verify` and `/export` are read-only admin
-operations. Rate limiting POST prevents log flooding by an untrusted client.
+If you have direct DB access, update a row manually in PostgreSQL.
+Then run `GET /verify` again.
 
-## What Works
+## Example responses
 
-- Append-only POST with SHA-256 chain linking
-- Full chain verification at GET `/verify`
-- Per-entry verification at GET `/log/:id`
-- Tamper detection verified by direct DB mutation in tests
-- Filtered export by actor and date range (ISO string comparison)
-- Rate limiting: 100 POSTs per 15 minutes
-- API key auth on all routes
-- Pino structured logging with `pino-pretty` in development
-- Database migrations checked in (`prisma/migrations/`)
-- Docker + docker-compose one-command boot
-- CLI: `npm run verify`
-- 9 tests: hash determinism, key ordering, validation, auth, chain links,
-  tamper detection, entry verification, export filtering
+### Health check
 
-## What Is Unfinished (Stretch Goals)
+```json
+{ "status": "ok", "time": "..." }
+```
 
-**Merkle-tree batching** — Current `/verify` loads all entries and walks them
-O(n). For 100k+ entries this slows down. The next step would be batching every
-1,000 entries into a Merkle tree, storing roots per batch, and verifying roots
-first so the happy path becomes O(batches).
+### Successful verification
 
-**Streaming export** — Current `/export` loads all matching rows into memory.
-A production version would use cursor-based pagination with a `cursor` query
-param and `X-Next-Cursor` response header.
+```json
+{ "status": "pass", "checked": 2 }
+```
 
-## Known Issue
+### Failed verification after tampering
 
-The `$transaction` approach prevents the logical race condition in hash
-ordering. However, at default READ COMMITTED isolation, extreme concurrent load
-could still allow two transactions to read the same `lastEntry` before either
-commits. A fully correct fix would require `SELECT ... FOR UPDATE` on the last
-row or SERIALIZABLE isolation.
+```json
+{ "status": "fail", "broken_id": 2, "reason": "hash_mismatch" }
+```
 
-## AI Use Log
+## Docker
 
-| Tool | Approx. tokens / suggestions | Used for |
-|------|------------------------------|----------|
-| GitHub Copilot | ~200 suggestions | TypeScript completion, Express wiring, Prisma query syntax, and repo implementation |
-| Claude | Not used in this workspace session | Mentioned here only because the original build brief requested an honest AI-use log format |
+Docker files are included in the repo.
+If Docker Desktop is available on your machine, you can use it to run PostgreSQL and the app.
+
+If Docker is not available, use a local PostgreSQL installation instead.
+
+## Testing notes
+
+The test suite covers:
+
+- SHA-256 hash determinism
+- payload key order independence
+- auth rejection
+- chain linking across entries
+- clean-chain verification
+- tamper detection
+- entry-level verification
+- export filtering
+
+## Security and design decisions
+
+- API key auth is used because the brief allows a simple auth layer.
+- Rate limiting is applied to `POST /log` to reduce abuse.
+- Logging is structured with Pino.
+- Canonical JSON hashing is used to keep hashes stable.
+- Migrations are committed so the schema is reproducible.
+
+## What is intentionally not included
+
+- No frontend UI
+- No browser homepage
+- No in-memory database fallback
+- No demo seed script
+- No extra local helper scripts
+
+These were removed to keep the submission focused on the required backend behavior.
+
+## AI use log
+
+- GitHub Copilot: used for TypeScript completion, Express wiring, Prisma query syntax, and quick implementation guidance
+- ChatGPT: used for explaining the brief, reviewing the implementation, and helping with submission readiness
+
+## Submission checklist
+
+- [ ] PostgreSQL is running locally
+- [ ] `npx prisma migrate dev --name init` succeeds
+- [ ] `npm test` passes
+- [ ] `npm run verify` passes
+- [ ] GitHub repo is pushed and public
+- [ ] Loom walkthrough is recorded
+- [ ] Submission form is completed
+
+## Final note
+
+This project is backend-only and is meant to prove that the log chain is tamper-evident.
+The most important demo is:
+
+1. create two log entries
+2. show they chain correctly
+3. tamper with the database directly
+4. show verification fails
+
+That is the core of the assignment.

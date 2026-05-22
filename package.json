@@ -10,9 +10,6 @@
     "test": "jest --runInBand",
     "migrate": "prisma migrate dev",
     "verify": "ts-node src/cli/verify.ts",
-    "seed": "ts-node src/cli/seed.ts",
-    "dev:docker": "bash ./scripts/dev-docker.sh",
-    "dev:docker:ps1": "powershell -ExecutionPolicy Bypass -File ./scripts/dev-docker.ps1",
     "generate": "prisma generate"
   },
   "dependencies": {
